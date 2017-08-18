@@ -1,10 +1,10 @@
 {
   "version": "1.0.0",
-  "name": "konnector name",
+  "name": "Semidao konnector",
   "type": "node",
-  "slug": "konnectorslug",
+  "slug": "semidao",
   "description": "description",
-  "source": "git://github.com/cozy/cozy-konnector-thename.git",
+  "source": "git://github.com/laurentriffard/cozy-konnector-semidao.git",
   "fields": {
     "save_folder": {
       "doctype": "io.cozy.files",
@@ -30,9 +30,9 @@
     }
   },
   "permissions": {
-    "kittens": {
-      "description": "Required to save the kittens details",
-      "type": "io.cozy.kitten"
+    "bills": {
+      "description": "Required to save the bills data",
+      "type": "io.cozy.bills"
     },
     "files": {
       "description": "Required to save the bills",
@@ -42,10 +42,14 @@
       "description": "Required to get the account's data",
       "type": "io.cozy.accounts",
       "verbs": ["GET"]
+    },
+    "bank": {
+      "description": "Required to link bills to a bank operation",
+      "type": "io.cozy.bank.operations"
     }
   },
   "developer": {
-    "name": "cozy",
+    "name": "laurentriffard",
     "url": "cozy.io"
   }
 }
