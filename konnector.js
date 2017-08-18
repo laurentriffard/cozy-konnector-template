@@ -3,14 +3,23 @@
 
 'use strict'
 
-const {baseKonnector, filterExisting, saveDataAndFile, models} = require('cozy-konnector-libs')
-const Kitten = models.baseModel.createNew({
-  name: 'io.cozy.kitten'
-})
+const cheerio = require('cheerio')
+const crypto = require('crypto')
+const moment = require('moment')
+const request = require('request')
+const {baseKonnector, filterExisting, saveDataAndFile, models, log, linkBankOperation} = require('cozy-konnector-libs')
+const Bill = models.bill;
 
 module.exports = baseKonnector.createNew({
-  name: 'io.cozy.kitten',
-  models: [],
+  name: 'Semidao',
+  slug: 'semidao',
+  description: 'Konnector Semidao',
+  vendorLink: 'http://semidao.fr/',
+  fields: {
+    email: { type: 'text' },
+    password: { type: 'password' },
+  },
+  models: [Bill],
   // fetchOperation is the list of function which will be called in sequence with the following
   // parameters :
   // requiredFields : the list of attributes of your connector that the user can choose (often login and password)
@@ -18,74 +27,159 @@ module.exports = baseKonnector.createNew({
   // data : another object passed accross function, not used
   // next : this is a callback you have to call when the task of the current function is finished
   fetchOperations: [
-    fetchKittens,
+    openSession,  // needed to get a session cookie
+    logIn,
+    parseBillPage,
     customFilterExisting,
-    customSaveDataAndFile
+    customSaveDataAndFile,
+    customLinkBankOperation 
   ]
 })
 
-function fetchKittens (requiredFields, entries, data, next) {
-  let request = require('request')
-  // request-debug is a module which can trace and display in the standard output all the internet
-  // requests made by the konnector with the request module or request-promise also.
-  // require('request-debug')(request)
 
-  // Here we define the default parameters used in any http request made by the request modules so
-  // that you do not have to fill it every time. Here we only do one request but it can be usefull
-  // for a real connector.
-  request = request.defaults({
-    json: true,
-    headers: {
-      // a lot of web service do not want to be called by robots and then check the user agent to
-      // be sure they are called by a browser. This user agent works most of the time.
-      'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:36.0) ' +
-                    'Gecko/20100101 Firefox/36.0'
-    }
-  })
-  request({
-    uri: 'https://api.qwant.com/api/search/images',
-    qs: {
-      q: 'chatons',
-      count: 10
-    }
-  }, function (err, response, body) {
-    // Error handling. If there was an error in the previous request, we directly call next filling
-    // the first argument which is the error message. Then the connector is directly stopped.
-    if (err) return next(err.message)
+const baseUrl  = 'http://agence-en-ligne.semidao.fr/wp/'
+const homeUrl  = baseUrl + 'home.action'
+const loginUrl = baseUrl + 'j_security_check'
+const billsUrl = baseUrl + 'displayBills.action'
 
-    if (body && body.data && body.data.result && body.data.result.items) {
-      // entries.fetched is used by filterExisting to check if some of its items already exist
-      entries.fetched = body.data.result.items.map(item => ({
-        title: item.title,
-        pdfurl: item.media,
-        // uniqueId will be the final name of the saved file, it is also used to check if the file
-        // is already there and not fetch a duplicate version of it
-        uniqueId: getFileName(item.media) + '_' + item._id
-      }))
-      next()
-    }
-  })
-
-  function getFileName (caturl) {
-    // from http://tout-en-couleur.e-monsite.com/medias/images/holy.jpg to holy
-    const path = require('path')
-    const parsed = require('url').parse(caturl)
-    return path.parse(path.basename(parsed.pathname)).name
+function openSession(requiredFields, billInfos, data, next) {
+  //request.defaults({jar: true})
+  const options = {
+    method: 'GET',
+    jar: true,
+    url: homeUrl
   }
+  request(options, function (err, res, body) {
+    log('debug', 'openSession headers :'+decodeURIComponent(JSON.stringify(res.headers,null,'  ')))
+    next()
+  })
+} 
+
+function logIn (requiredFields, billInfos, data, next) {
+  const logInOptions = {
+    method: 'POST',
+    form: {
+      j_username: requiredFields.email,
+      password: '',
+      j_password: crypto.createHash('md5').update(requiredFields.password).digest("hex")
+    },
+    jar: true,
+    url: loginUrl
+  }
+
+  request(logInOptions, function (err, res, body) {
+    // should redirect to http://agence-en-ligne.semidao.fr/wp/home.action
+    log('debug', logInOptions.form)
+    log('debug', 'logIn POST result')
+    log('debug', res.headers)
+
+    const isNoLocation = !res.headers.location
+    const isNot302 = res.statusCode !== 302
+    const isError =
+      res.headers.location &&
+      res.headers.location.indexOf('error') !== -1
+
+    if (err || isNoLocation || isNot302 || isError) {
+      log('error', 'Authentification error')
+      next('LOGIN_FAILED')
+    } else {
+      log('debug', 'getting home again…')
+
+      const homeUrlOptions = {
+	method: 'GET',
+	jar: true,
+	url: homeUrl
+      }
+      request(homeUrlOptions, function (err, res, body) {
+	if(err) {
+	  log('error', 'Authentification error 2')
+	} else {
+
+	  log('debug', 'now getting '+billsUrl)
+	  const billsUrlOptions = {
+	    method: 'GET',
+	    jar: true,
+	    url: billsUrl
+	  }
+	  request(billsUrlOptions, function (err, res, body) {
+	    log('debug', 'after GET '+billsUrl)
+	    //log('debug', res.headers)
+	    if (err) {
+	      log('error', err)
+	      next('LOGIN_FAILED')
+	    } else {
+	      data.html = body
+	      log('debug', 'billsUrl -> next')
+	      next()
+	    }
+	  })
+	}
+      })
+    }
+  })
 }
 
+
+function parseBillPage (requiredFields, bills, data, next) {
+  log('debug', 'in parseBillPage')
+
+  bills.fetched = []
+
+  if (!data.html) {
+    log('info', 'No new bills to import')
+    return next()
+  }
+  const $ = cheerio.load(data.html)
+
+  //var fs = require('fs');
+  //const $ = cheerio.load(fs.readFileSync('/home/sylvie/Téléchargements/displayBills.action.html'));
+  //log('debug', $.html())
+
+  var billTable = $('table#billTable > tbody')
+
+  billTable.find('tr').each(function () {
+    log('debug', 'row : '+$(this).text())
+    var children = $(this).children();
+    let billDate   = $(children[0]).text()
+    let billRef    = $(children[1]).text()
+    let billAmount = $(children[2]).text()
+    let billUrl    = $(this).find('a').attr('href')
+    billAmount = parseFloat(billAmount)
+    //log('debug', 'billDate='+billDate+' billRef='+billRef+' billAmount='+billAmount+' billUrl='+billUrl)
+
+    let bill = {
+      amount: billAmount,
+      date: moment(billDate, 'DD/MM/YYYY'),
+      vendor: 'Semidao',
+      pdfurl: baseUrl+billUrl
+    }
+    log('debug', 'bill:'+ JSON.stringify(bill)); log('debug', bill)
+    if (billUrl) {
+      bills.fetched.push(bill)
+    } else {
+      log('warning', 'Bill ref. "'+billRef+'" not fetched because of void URL')
+    }
+  })
+  next()
+}
+
+
 function customFilterExisting (requiredFields, entries, data, next) {
-  // filterExisting will check if some items in entries.fetched already exist in database and put
-  // the not existing ones in entries.filtered
-  filterExisting(null, Kitten)(requiredFields, entries, data, next)
+  filterExisting(null, Bill)(requiredFields, entries, data, next)
 }
 
 function customSaveDataAndFile (requiredFields, entries, data, next) {
-  // read items in entries.fetched or entries.filtered and put them in database. If there is a
-  // pdfurl attribute in some items, it will download the corresponding file and put it in your
-  // cozy
-  const fnsave = saveDataAndFile(null, Kitten, {
-    extension: 'jpg'
-  })
-  fnsave(requiredFields, entries, data, next)
+  saveDataAndFile(null, Bill, 'Semidao', ['facture'])(
+    requiredFields, entries, data, next)
 }
+
+function customLinkBankOperation (requiredFields, entries, data, next) {
+  linkBankOperation({
+    model: Bill,
+    identifier: 'Semidao',
+    minDateDelta: 4,
+    maxDateDelta: 25,
+    amountDelta: 0.1
+  }) (requiredFields, entries, data, next);
+}
+
