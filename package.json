@@ -1,10 +1,10 @@
 {
-  "name": "cozy-konnector-newkonnectorname",
+  "name": "cozy-konnector-semidao",
   "version": "1.0.0",
   "description": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cozy/cozy-konnector-thename.git"
+    "url": "git+https://github.com/laurentriffard/cozy-konnector-semidao.git"
   },
   "keywords": [],
   "author": "",
@@ -23,7 +23,7 @@
     "build": "webpack",
     "lint": "standard --fix konnector.js",
     "deploy:travis": "git-directory-deploy --username <YOUR_GH_USERNAME> --email <YOUR_EMAIL> --directory build/ --repo=https://$GITHUB_TOKEN@github.com/<USERNAME_GH>/<SLUG_GH>.git",
-    "deploy": "git-directory-deploy --directory build/ --branch build --repo=https://github.com/<USERNAME_GH>/<SLUG_GH>.git"
+    "deploy": "git-directory-deploy --directory build/ --branch build --repo=git@github.com:laurentriffard/cozy-konnector-semidao.git"
   },
   "devDependencies": {
     "copy-webpack-plugin": "^4.0.1",
